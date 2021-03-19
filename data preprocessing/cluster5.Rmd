@@ -1,0 +1,303 @@
+---
+title: "cluster based on business KPIs"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+Reading data into R.
+
+## Loading package
+
+```{r}
+library(rlist)
+library(rvest)
+library(xml2)
+library(httr)
+library(stringr)
+```
+
+##Reading data into R
+
+```{r}
+dat2 <- read.csv("full_data.csv", header=T, na.strings=c("","NA"))
+```
+
+## Getting table from html page
+
+```{r}
+webpage <- "https://siccode.com/page/what-is-an-anzsic-code"
+response <- GET(webpage)
+table <- html_table(content(response))[2]
+df <- as.data.frame(table)
+```
+
+```{r}
+companies_type <- read.csv("companies.csv", header = TRUE)
+companies_type <- companies_type[!(is.na(companies_type$industry) | companies_type$industry==""), ]
+companies_type$industry <- as.character(companies_type$industry)
+industry <- unique(companies_type$industry)
+```
+
+##pre-processing the table
+
+```{r}
+for(index in 1:length(df$X3)){
+  if(df$X1[index] != ""){
+    cur <- df$X1[index]
+  }
+  else{
+    df$X1[index] = cur
+  }
+}
+```
+
+#Pick the key words
+
+```{r}
+a_list <- list()
+for (element in unique(df$X1)){
+  x <- c(gsub("[,()]","",unlist(strsplit(df[df$X1 == element,]$X3, " "))))
+  a_list[[element]] <- unique(x[! x%in% c("and", "of", "for", "Services", "Other")])
+}
+```
+
+
+```{r}
+lst2 <- unique(strsplit(gsub("\\s+", " ", gsub("and|of|Services|Other,", " ", companies_type$industry), " "), " "))
+```
+
+```{r}
+labels <- c("E", "C", "L", "G", "G", "K", "I", "unknown", "Q", "H", "A", "M", "G", "p", "p", "p", "R", "K", "G", "Q", "S", "G", "E", "L", "C", "H", "R", "F", "p", "A", "K", "I", "D", "J", "B", "unknown", "O")
+```
+
+```{r}
+for (index2 in 1:length(industry)){
+  companies_type[which(companies_type$industry==industry[index2]),]$industry <- rep(labels[index2], length(companies_type[which(companies_type$industry==industry[index2]),]$industry))
+}
+```
+
+
+```{r}
+wired <- c()
+for (element in companies_type$user[duplicated(companies_type$user)]){
+  #print(companies_type$industry[which(companies_type$user == element)])
+  if(element %in% unique(dat2$user)){
+    wired <- c(wired, element)
+    #print(element)
+  }
+}
+```
+
+```{r}
+nothave <- c()
+value <- 0
+for (element in unique(dat2$user)){
+  if (!element %in% companies_type$user){
+    nothave <- c(nothave, element)
+    #print(element)
+  }
+  else{
+    value <- value + (element %in% companies_type$user)
+  }
+}
+print(length(unique(dat2$user))-value)
+```
+
+
+```{r}
+Label <- c() 
+for (element in unique(dat2$user)){
+  if ((!element %in% nothave)&(!element %in% wired)){
+    Label <- c(Label, unique(companies_type[which(unique(companies_type)$user == element), ])$industry)
+  }
+  else if (element %in% wired){
+    if(length(unique(companies_type[which(unique(companies_type)$user == element), ])$industry)==1){
+      Label <- c(Label, unique(companies_type[which(unique(companies_type)$user == element), ])$industry)
+    }
+    else{
+      tt <- table(unique(companies_type[which(unique(companies_type)$user == element), ])$industry)
+      Label <- c(Label, names(tt[which.max(tt)]))
+    }
+  }
+  else{
+    Label <- c(Label, "unknown")
+  }
+  
+}
+length(Label)
+length(unique(dat2$user))
+```
+
+```{r}
+Labels <- c()
+for (index in 1:length(unique(dat2$user))){
+  Labels <- c(Labels, rep(Label[index], length(dat2[which(dat2$user == unique(dat2$user)[index]), ]$user)))
+}
+length(dat2$user)
+length(Labels)
+```
+
+
+```{r}
+dat2 <- cbind(dat2, Labels)
+dat2$Labels <- as.character(dat2$Labels)
+```
+
+
+
+
+Counting the number of NAs in dataframe
+```{r}
+colMeans(is.na(dat2))
+```
+
+65% of company variable are na. Let us drop this column.
+
+```{r}
+dat2 <- dat2[-10]
+```
+
+```{r}
+unique(dat2$osp)
+unique(dat2$account_type)
+```
+There is only one level for "osp" variable. Let us drop that as well.
+
+```{r}
+dat2 <- dat2[-3]
+dat2 <- dat2[-6]
+```
+
+
+## Data Preprocessing
+
+Let us convert balance date variable to real date.
+```{r}
+dat2$balance_date <- as.Date(dat2$balance_date, format = "%Y-%m-%d")
+class(dat2$balance_date)
+```
+
+Let us see how many differece currency in our dataframe.
+
+```{r}
+unique(dat2$currency)
+```
+
+Let us subset by this levels.
+
+```{r}
+AUD = as.data.frame(dat2[which(dat2$currency == "AUD"),])
+NZD = as.data.frame(dat2[which(dat2$currency == "NZD"),])
+USD = as.data.frame(dat2[which(dat2$currency == "USD"),])
+GBP = as.data.frame(dat2[which(dat2$currency == "GBP"),])
+```
+
+```{r}
+usertype <- paste(NZD$user, NZD$account_name, sep = "+")
+NZD <- cbind(usertype, NZD)
+```
+
+```{r}
+NZD <- NZD[c(-2, -3, -4, -6)]
+```
+
+```{r}
+dim(NZD)
+```
+
+```{r}
+lmp <- function (modelobject) {
+    if (class(modelobject) != "lm") stop("Not an object of class 'lm' ")
+    f <- summary(modelobject)$fstatistic
+    p <- pf(f[1],f[2],f[3],lower.tail=F)
+    attributes(p) <- NULL
+    return(p)
+}
+```
+
+```{r}
+daily_profit <- c()
+daily_income <- c()
+p_value <- c()
+user_name <- c()
+coeff<- c()
+Labels <- c()
+for (use in unique(NZD$usertype)){
+  part_sum <- as.data.frame(NZD[which(NZD$usertype==use), ])
+  #part_sum <- aggregate(. ~balance_date, data=part, sum, na.rm=TRUE)
+  if (min(part_sum$balance_date) < as.Date("2020-01-01", format = "%Y-%m-%d")){
+      part_sum <- part_sum[which((part_sum$balance_date) < as.Date("2020-01-01", format = "%Y-%m-%d")), ]
+      if(length(part_sum$balance_date) >= 5){
+        x <- part_sum$balance_date
+        y <- part_sum$NZD
+    #plot(x, y)
+        coeff <- c(coeff, coef(lm(y~x))[2])
+        p_value <- c(p_value, lmp(lm(y~x)))
+        user_name <- c(user_name, use)
+        period <- max(x) - min(x)
+        daily_profit <- c(daily_profit, (part_sum$revenue_to_date[length(part_sum$revenue_to_date)]-part_sum$revenue_to_date[1])/as.numeric(period))
+        daily_income <- c(daily_income, mean(part_sum$daily_revenue))
+        Labels <- c(Labels, unique(part_sum$Labels))
+      }
+  }
+}
+```
+
+```{r}
+expenses <- as.numeric(daily_income) - as.numeric(daily_profit)
+new_data <- as.data.frame(cbind(user_name, daily_profit, daily_income, expenses, coeff, p_value, Labels))
+```
+
+
+```{r}
+dim(new_data)
+```
+
+```{r}
+x <- as.numeric(levels(new_data$daily_profit))[new_data$daily_profit]
+y <- as.numeric(levels(new_data$daily_income))[new_data$daily_income]
+plot(round(x), round(y), xlab = "daily profit", ylab = "daily income", main = "Account base daily income VS daily profit")
+```
+
+```{r, warning=FALSE}
+x <- as.numeric(levels(new_data$daily_profit))[new_data$daily_profit]
+y <- as.numeric(levels(new_data$expenses))[new_data$expenses]
+plot(log(round(x)), log(round(y)), main = "Account base daily expenses VS daily profit", xlab = "daily profit", ylab = "daily expenses")
+```
+
+```{r, warning = FALSE}
+x <- as.numeric(levels(new_data$daily_income))[new_data$daily_income]
+y <- as.numeric(levels(new_data$expenses))[new_data$expenses]
+plot(log(round(x)), log(round(y)), xlab = "daily income", ylab = "daily expenses", main = "Account base daily expenses VS daily income")
+```
+
+```{r, warning=FALSE}
+y <- as.numeric(levels(new_data$daily_profit))[new_data$daily_profit]
+x <- as.numeric(levels(new_data$daily_income))[new_data$daily_income]
+plot(log(round(x)), log(round(y)), xlab = "log of daily income", ylab = "log of daily profit", main = "log of daily income vs log of daily profit")
+```
+
+## Fitting model
+
+```{r, warning=FALSE}
+linear_fit <- lm(y~x)
+summary(linear_fit)
+```
+
+## Adding fitted line into graph.
+
+```{r, warning=False}
+y <- as.numeric(levels(new_data$daily_profit))[new_data$daily_profit]
+x <- as.numeric(levels(new_data$daily_income))[new_data$daily_income]
+plot(x, y, xlab = "daily income", ylab = "daily profit", main = "log of daily income vs log of daily profit")
+abline(linear_fit, col = "blue")
+```
+
+## Write new data into csv file.
+```{r}
+write.csv(new_data,"sub_new_data2.csv", row.names = FALSE)
+```
+
+
+

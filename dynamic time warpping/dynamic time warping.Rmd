@@ -1,0 +1,431 @@
+---
+title: "dynamic time warping"
+author: "Xinyu yao"
+date: "2021/1/7"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+##Install package
+```{r}
+library(dtw)
+library(lubridate)
+library(dtwclust)
+library(tidyverse)
+library(dplyr)
+library(zoo)
+```
+
+## Reading data into R
+```{r}
+full_data <- read.csv("full_data.csv", header = T)
+```
+
+## Droping unseless columns
+
+```{r}
+table(full_data$account_type)
+```
+
+There are onlt two levels of account type and most of them are the "sales". We can drop this column as well.
+
+```{r}
+full_data <- full_data[,c(-2, -10, -3, -7)]
+```
+
+## Subset by currency
+
+```{r}
+AUD = as.data.frame(full_data[which(full_data$currency == "AUD"),])
+NZD = as.data.frame(full_data[which(full_data$currency == "NZD"),])
+USD = as.data.frame(full_data[which(full_data$currency == "USD"),])
+GBP = as.data.frame(full_data[which(full_data$currency == "GBP"),])
+```
+
+
+## Droping useless columns
+
+```{r}
+NZD <- NZD[, c(-2, -7)]
+```
+
+## Handing missing values
+
+```{r}
+dim(NZD)
+```
+```{r}
+NZD <- na.omit(NZD)
+dim(NZD)
+```
+
+There is not missing values in out data-set.
+
+
+## Convert balance_date column to date type.
+```{r}
+NZD$balance_date <- as.Date(NZD$balance_date, format = "%Y-%m-%d")
+```
+
+## Merge account type with the user.
+
+```{r}
+usertype <- paste(NZD$user, NZD$account_name, sep = "+")
+NZD <- cbind(usertype, NZD)
+```
+
+```{r}
+accounts <- unique(NZD$usertype)
+length(accounts)
+```
+
+## Filter the business with got too less records.
+
+```{r}
+names <- c()
+min_date <- Sys.Date()
+max_date <- as.Date("1982-01-13")
+for (account in accounts){
+  number <- sum(NZD$usertype == account)
+  min_date <- min(min_date, NZD[NZD$usertype == account, ]$balance_date)
+  max_date <- max(max_date, NZD[NZD$usertype == account, ]$balance_date)
+  if ((number <= 12) & (julian(max_date, min_date)[1] >= 365)){
+    names <- c(names, account)
+  }
+}
+```
+
+```{r}
+new_data <- NZD
+for (element in names){
+  new_data <- new_data[new_data$usertype != element, ]
+}
+```
+
+```{r}
+new_accounts <- unique(new_data$usertype)
+length(new_accounts)
+```
+
+## A example with two plots.
+
+```{r}
+date <- new_data[new_data$usertype == new_accounts[1], ]$balance_date
+daily_revenue <- new_data[new_data$usertype == new_accounts[1], ]$daily_revenue
+a <- cbind(date, daily_revenue)
+plot(new_data[new_data$usertype == new_accounts[1], ]$balance_date, 
+new_data[new_data$usertype == new_accounts[1], ]$daily_revenue, xlab = "date", ylab = "daily revenue", main = "plot of daily revenue vs date")
+
+```
+
+```{r}
+date <- new_data[new_data$usertype == new_accounts[2], ]$balance_date
+daily_revenue <- new_data[new_data$usertype == new_accounts[2], ]$daily_revenue
+b <- cbind(date, daily_revenue)
+plot(new_data[new_data$usertype == new_accounts[2], ]$balance_date, 
+new_data[new_data$usertype == new_accounts[2], ]$daily_revenue, xlab = "date", ylab = "daily revenue", main = "plot of daily revenue vs date")
+```
+
+
+From the above plot we can see they are Not the uniform distribution. For example the company may have 10 records in one month but 0 at the reset of this year.
+
+
+## Aggregate by month and take the time series data.
+
+```{r, warning=FALSE}
+series <- list()
+final <- data.frame()
+for (element in new_accounts){
+  part <- as.data.frame(new_data[new_data$usertype == element, ])
+  part_sum <- part%>%
+  mutate(month = format(balance_date, "%m"), year = format(balance_date, "%Y"))%>%
+  group_by(month, year) %>%
+  summarise_at(c("daily_revenue", "revenue_to_date"), sum) %>%
+  as.data.frame()
+  part_sum <- cbind(part_sum, rep(element, nrow(part_sum)))
+  colnames(part_sum) <- c("month","year", "daily_revenue", "revenue_to_date", "accounts_name")
+  series <- c(series, list(part_sum$daily_revenue))
+  final <- rbind(final, part_sum)
+  }
+```
+
+```{r}
+numbers <- unique(final$accounts)
+length(numbers)
+```
+
+```{r}
+Date <- as.Date(as.yearmon(paste(final$year, final$month, sep = "-")))
+final <- cbind(Date, final)
+head(final)
+```
+
+## checking the lenght of the time series.
+```{r}
+mean(unlist(lapply(series, FUN = length)))
+```
+
+Most of the company have more than one year's records. To made or result more clearly we are only consider the closest 18 months.
+
+```{r}
+series1 <- list()
+indexs <- which(unlist(lapply(series, FUN = length)) > 18)
+for (index in 1:length(numbers)){
+  if (index %in% indexs){
+    part <- as.data.frame(new_data[new_data$usertype == levels(numbers)[index], ])
+    #new_data[new_data$usertype == numbers[index], ]
+    part_filter <- part %>%  arrange(desc(balance_date)) %>% slice(1:18)
+    series1 <- c(series1, list(part_filter$daily_revenue))
+  }
+  else{
+    series1 <- c(series1, series[index])
+  }
+}
+```
+
+```{r}
+length(series)
+length(series1)
+```
+
+
+## Another example two polts
+```{r}
+date <- final[final$accounts == numbers[1], ]$Date
+daily_revenue <- final[final$accounts == numbers[1], ]$daily_revenue
+a <- cbind(date, daily_revenue)
+plot(date, daily_revenue, xlab = "month", ylab = "daily revenue", main = "plot of daily revenue vs month")
+```
+
+
+```{r}
+date <- final[final$accounts == numbers[2], ]$Date
+daily_revenue <- final[final$accounts == numbers[2], ]$daily_revenue
+b <- cbind(date, daily_revenue)
+plot(date, daily_revenue, xlab = "date", ylab = "daily revenue", main = "plot of daily revenue vs date")
+```
+
+## Dynamic time warping (partitional clustering)
+
+```{r}
+pc <- tsclust(series,preproc = zscore, type = "partitional", k = 18L, 
+              distance = "dtw_basic", centroid = "pam", 
+              seed = 3247L, trace = TRUE)
+```
+
+```{r}
+plot(pc)
+```
+
+## Hierarchical clustering with dynaimc time warping
+
+```{r}
+hc_sbd <- tsclust(series, type = "h", k = 20L,preproc = zscore, seed = 3247L, distance = "dtw_basic", centroid = shape_extraction, control = hierarchical_control(method = "average"), trace = TRUE)
+```
+
+
+```{r}
+plot(hc_sbd, type = "sc")
+```
+
+## Getting labels
+
+```{r}
+cluster <- tibble(cluster = c(hc_sbd@cluster))
+length(cluster$cluster)
+unique(cluster)
+table(cluster$cluster)
+```
+
+## 18 months
+
+```{r}
+pc1 <- tsclust(series1,preproc = zscore, type = "partitional", k = 18L, 
+              distance = "dtw_basic", centroid = "pam", 
+              seed = 3247L, trace = TRUE)
+```
+
+```{r}
+plot(pc1)
+```
+
+```{r}
+hc_sbd1 <- tsclust(series1, type = "h", k = 18L,preproc = zscore, seed = 3247L, distance = "dtw_basic", centroid = shape_extraction, control = hierarchical_control(method = "average"), trace = TRUE)
+```
+
+```{r}
+plot(hc_sbd1, type = "sc")
+```
+
+## Getting labels
+
+```{r}
+cluster <- tibble(cluster = c(hc_sbd1@cluster))
+length(cluster$cluster)
+unique(cluster)
+table(cluster$cluster)
+```
+
+
+
+```{r}
+label <- c()
+for (index in seq(1:length(numbers))){
+  label <- c(label, rep(cluster$cluster[index], sum(final$accounts == numbers[index])))
+}
+result <- cbind(final, label)
+```
+
+## Combine result to orginal data-set.
+
+```{r}
+#strsplit(levels(result$accounts_name), "+", fixed = TRUE)
+label <- c()
+full_name <- paste(full_data$user, full_data$account_name, sep = "+")
+for (element in unique(full_name)){
+  if (element %in% numbers){
+    label <- c(label, rep(unique(result[final$accounts_name == element, ]$label), sum(full_name == element)))
+  }
+  else{
+    label <- c(label, rep(NA,sum(full_name == element) ))
+  }
+}
+full_data_result <- cbind(full_data, label)
+```
+
+## Combine pervious result all together.
+
+```{r}
+k_means <- read.csv("new_result2.csv", header = T)
+uniqu <- unique(k_means$company_id)
+```
+
+```
+```{r}
+K_means <- c()
+Agg <- c()
+Min_Batch <- c()
+for (element in unique(full_data$user)){
+  if(element %in% uniqu){
+    K_means <- c(K_means, rep(unique(k_means[k_means$company_id == element, ]$K_means), sum(full_data$user == element)))
+    Agg <- c(Agg, rep(unique(k_means[k_means$company_id == element, ]$Agglomerative), sum(full_data$user == element)))
+    Min_Batch <- c(Min_Batch, rep(unique(k_means[k_means$company_id == element, ]$Min_Batch), sum(full_data$user == element)))
+  }
+  else{
+    K_means <- c(K_means, rep(NA,sum(full_data$user == element) ))
+    Agg <- c(Agg, rep(NA,sum(full_data$user == element) ))
+    Min_Batch <- c(Min_Batch, rep(NA,sum(full_data$user == element) ))
+  }
+}
+full_data_result <- cbind(full_data_result, K_means, Agg, Min_Batch)
+```
+```
+```{r}
+K_means <- c()
+Agg <- c()
+Min_Batch <- c()
+for (element in unique(paste(full_data$user, full_data$account_name, sep = "+"))){
+  if(element %in% uniqu){
+    K_means <- c(K_means, rep(unique(k_means[k_means$company_id == element, ]$K_means), sum(paste(full_data$user, full_data$account_name, sep = "+") == element)))
+    Agg <- c(Agg, rep(unique(k_means[k_means$company_id == element, ]$Agglomerative), sum(paste(full_data$user, full_data$account_name, sep = "+") == element)))
+    Min_Batch <- c(Min_Batch, rep(unique(k_means[k_means$company_id == element, ]$Min_Batch), sum(paste(full_data$user, full_data$account_name, sep = "+") == element)))
+  }
+  else{
+    K_means <- c(K_means, rep(NA,sum(paste(full_data$user, full_data$account_name, sep = "+") == element) ))
+    Agg <- c(Agg, rep(NA,sum(paste(full_data$user, full_data$account_name, sep = "+") == element) ))
+    Min_Batch <- c(Min_Batch, rep(NA,sum(paste(full_data$user, full_data$account_name, sep = "+") == element) ))
+  }
+}
+full_data_result <- cbind(full_data_result, K_means, Agg, Min_Batch)
+```
+
+## Comparing the dynamic time warping result with the agglomerative cluster reslut.
+
+```{r}
+table(full_data_result[which(full_data_result$Agg == 0), ]$label)
+```
+
+```{r}
+table(full_data_result[which(full_data_result$Agg == 1), ]$label)
+```
+
+```{r}
+table(full_data_result[which(full_data_result$Agg == 2), ]$label)
+```
+
+```{r}
+table(full_data_result[which(full_data_result$Agg == 3), ]$label)
+```
+
+##Finding the common features of the same label.
+
+```{r}
+group17 <- result[which(result$label == 17),]
+group17
+```
+
+```{r}
+library(ggplot2)
+```
+
+```{r}
+ggplot(group17, aes(x=Date, y = daily_revenue))+ geom_point()+ facet_wrap( ~ accounts_name, scales = "free") + geom_line()
+```
+
+
+
+```
+## The average daily revenue for each group.
+
+```{r}
+group1 <- result[which(result$label == 17),]
+group2 <- result[which(result$label == 2),]
+group3 <- result[which(result$label == 3),]
+group4 <- result[which(result$label == 4),]
+```
+
+```{r}
+mean(group1$daily_revenue)
+mean(group2$daily_revenue)
+mean(group3$daily_revenue)
+mean(group4$daily_revenue)
+
+```
+
+## The average revenue to date.
+
+```{r}
+mean(group1$revenue_to_date)
+mean(group2$revenue_to_date)
+mean(group3$revenue_to_date)
+mean(group4$revenue_to_date)
+```
+
+## The money left in the account.
+
+```{r}
+x <- c()
+y <- c()
+z <- c()
+t <- c()
+for (business in unique(group1$accounts)){
+  x <- c(x, tail(group1$revenue_to_date[which(group1$accounts == business)], n = 1))
+}
+mean(x)
+for (business in unique(group2$accounts)){
+  y <- c(y, tail(group1$revenue_to_date[which(group2$accounts == business)], n = 1))
+}
+mean(y)
+for (business in unique(group3$accounts)){
+  z <- c(z, tail(group1$revenue_to_date[which(group3$accounts == business)], n = 1))
+}
+mean(z)
+for (business in unique(group4$accounts)){
+  t <- c(t, tail(group1$revenue_to_date[which(group4$accounts == business)], n = 1))
+}
+mean(t)
+```

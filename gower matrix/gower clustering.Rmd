@@ -1,0 +1,141 @@
+---
+title: "gower"
+author: "Xinyu yao"
+date: "2021/2/21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(cluster)
+library(plot3D)
+library(corrplot)
+library(BBmisc)
+library(tidyverse)
+library(Rtsne)
+library(ggplot2)
+library(ggpubr)
+library(factoextra)
+```
+
+
+```{r}
+df = read.csv('sub_new_data1.csv', header=TRUE)
+```
+
+## Remove useless columns
+
+You can also embed plots, for example:
+
+```{r}
+df <- df[,c(-1, -4, -6)]
+```
+
+## Data normalized
+
+```{r}
+#df <- normalize(df, method = "standardize", range = c(0, 1), margin = 1L, on.constant = "quiet")
+```
+
+## Gower similar measure
+
+```{r}
+gower_df <- daisy(df,
+                    metric = "gower", weights = c(10000, 10000, 1000, 0.0001))
+```
+
+```{r}
+summary(gower_df)
+```
+
+```{r}
+silhouette <- c()
+silhouette = c(silhouette, NA)
+for(i in 2:16){
+  pam_clusters = pam(as.matrix(gower_df),
+                 diss = TRUE,
+                 k = i)
+  silhouette = c(silhouette ,pam_clusters$silinfo$avg.width)
+}
+plot(1:16, silhouette,
+     xlab = "Clusters",
+     ylab = "Silhouette Width")
+lines(1:16, silhouette)
+```
+
+## K-means cluster
+
+```{r}
+pam_german = pam(gower_df, diss = TRUE, k = 4)
+df[pam_german$medoids, ]
+```
+
+```{r}
+pam_summary <- df %>%
+  mutate(cluster = pam_german$clustering) %>%
+  group_by(cluster) %>%
+  do(cluster_summary = summary(.))
+pam_summary$cluster_summary
+```
+
+
+```{r}
+tsne_object <- Rtsne(gower_df, is_distance = TRUE)
+tsne_df <- tsne_object$Y %>%
+  data.frame() %>%
+  setNames(c("X", "Y")) %>%
+  mutate(cluster = factor(pam_german$clustering))
+ggplot(aes(x = X, y = Y), data = tsne_df) +
+  geom_point(aes(color = cluster))
+```
+
+## K-means with dummies variables
+
+```{r}
+library(fastDummies)
+results <- fastDummies::dummy_cols(df, select_columns = "Labels")
+results <- results[,-4]
+head(results)
+```
+
+## K-means algothrim (for not remove the covid-19 effect)
+
+```{r}
+res.km<- kmeans(results, 4)
+res.km
+```
+
+```{r}
+# Dimension reduction using PCA
+res.pca <- prcomp(results,  scale = TRUE)
+# Coordinates of individuals
+ind.coord <- as.data.frame(get_pca_ind(res.pca)$coord)
+# Add clusters obtained using the K-means algorithm
+ind.coord$cluster <- factor(res.km$cluster)
+# Add Species groups from the original data sett
+ind.coord$Species <- df$Species
+# Data inspection
+head(ind.coord)
+```
+
+```{r}
+# Percentage of variance explained by dimensions
+eigenvalue <- round(get_eigenvalue(res.pca), 1)
+variance.percent <- eigenvalue$variance.percent
+head(eigenvalue)
+```
+
+```{r}
+ggscatter(
+  ind.coord, x = "Dim.1", y = "Dim.2", 
+  color = "cluster", palette = "npg", ellipse = TRUE, ellipse.type = "convex",
+  shape = 19, size = 1.5,  legend = "right", ggtheme = theme_bw(),
+  xlab = paste0("Dim 1 (", variance.percent[1], "% )" ),
+  ylab = paste0("Dim 2 (", variance.percent[2], "% )" )
+) +
+  stat_mean(aes(color = cluster), size = 4)
+```
+

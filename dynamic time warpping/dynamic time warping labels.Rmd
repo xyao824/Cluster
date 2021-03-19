@@ -1,0 +1,394 @@
+---
+title: "dynamic time warping"
+author: "Xinyu yao"
+date: "2021/1/7"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+##Install package
+```{r}
+library(dtw)
+library(lubridate)
+library(dtwclust)
+library(tidyverse)
+library(dplyr)
+library(zoo)
+library(rlist)
+library(rvest)
+library(xml2)
+library(httr)
+library(stringr)
+```
+
+##Reading data into R
+
+```{r}
+dat2 <- read.csv("full_data.csv", header=T, na.strings=c("","NA"))
+```
+
+## Getting table from html page
+
+```{r}
+webpage <- "https://siccode.com/page/what-is-an-anzsic-code"
+response <- GET(webpage)
+table <- html_table(content(response))[2]
+df <- as.data.frame(table)
+```
+
+```{r}
+companies_type <- read.csv("companies.csv", header = TRUE)
+companies_type <- companies_type[!(is.na(companies_type$industry) | companies_type$industry==""), ]
+companies_type$industry <- as.character(companies_type$industry)
+industry <- unique(companies_type$industry)
+```
+
+##pre-processing the table
+
+```{r}
+for(index in 1:length(df$X3)){
+  if(df$X1[index] != ""){
+    cur <- df$X1[index]
+  }
+  else{
+    df$X1[index] = cur
+  }
+}
+```
+
+#Pick the key words
+
+```{r}
+a_list <- list()
+for (element in unique(df$X1)){
+  x <- c(gsub("[,()]","",unlist(strsplit(df[df$X1 == element,]$X3, " "))))
+  a_list[[element]] <- unique(x[! x%in% c("and", "of", "for", "Services", "Other")])
+}
+```
+
+
+```{r}
+lst2 <- unique(strsplit(gsub("\\s+", " ", gsub("and|of|Services|Other,", " ", companies_type$industry), " "), " "))
+```
+
+```{r}
+labels <- c("E", "C", "L", "G", "G", "K", "I", "unknown", "Q", "H", "A", "M", "G", "P", "P", "P", "R", "K", "G", "Q", "S", "G", "E", "L", "C", "H", "R", "F", "P", "A", "K", "I", "D", "J", "B", "unknown", "O")
+```
+
+```{r}
+for (index2 in 1:length(industry)){
+  companies_type[which(companies_type$industry==industry[index2]),]$industry <- rep(labels[index2], length(companies_type[which(companies_type$industry==industry[index2]),]$industry))
+}
+```
+
+
+```{r}
+wired <- c()
+for (element in companies_type$user[duplicated(companies_type$user)]){
+  #print(companies_type$industry[which(companies_type$user == element)])
+  if(element %in% unique(dat2$user)){
+    wired <- c(wired, element)
+    #print(element)
+  }
+}
+```
+
+```{r}
+nothave <- c()
+value <- 0
+for (element in unique(dat2$user)){
+  if (!element %in% companies_type$user){
+    nothave <- c(nothave, element)
+    #print(element)
+  }
+  else{
+    value <- value + (element %in% companies_type$user)
+  }
+}
+print(length(unique(dat2$user))-value)
+```
+
+
+```{r}
+Label <- c() 
+for (element in unique(dat2$user)){
+  if ((!element %in% nothave)&(!element %in% wired)){
+    Label <- c(Label, unique(companies_type[which(unique(companies_type)$user == element), ])$industry)
+  }
+  else if (element %in% wired){
+    if(length(unique(companies_type[which(unique(companies_type)$user == element), ])$industry)==1){
+      Label <- c(Label, unique(companies_type[which(unique(companies_type)$user == element), ])$industry)
+    }
+    else{
+      tt <- table(unique(companies_type[which(unique(companies_type)$user == element), ])$industry)
+      Label <- c(Label, names(tt[which.max(tt)]))
+    }
+  }
+  else{
+    Label <- c(Label, "unknown")
+  }
+  
+}
+length(Label)
+length(unique(dat2$user))
+```
+
+```{r}
+Labels <- c()
+for (index in 1:length(unique(dat2$user))){
+  Labels <- c(Labels, rep(Label[index], length(dat2[which(dat2$user == unique(dat2$user)[index]), ]$user)))
+}
+length(dat2$user)
+length(Labels)
+```
+
+
+```{r}
+dat2 <- cbind(dat2, Labels)
+dat2$Labels <- as.character(dat2$Labels)
+```
+
+
+
+## Data preprocessing
+
+Counting the number of NAs in dataframe
+```{r}
+colMeans(is.na(dat2))
+```
+
+65% of company variable are na. Let us drop this column.
+
+```{r}
+dat2 <- dat2[-10]
+```
+
+```{r}
+unique(dat2$osp)
+unique(dat2$account_type)
+```
+There is only one level for "osp" variable. Let us drop that as well.
+
+```{r}
+dat2 <- dat2[,c(-2, -3, -7)]
+```
+
+
+## Data Preprocessing
+
+Let us convert balance date variable to real date.
+```{r}
+dat2$balance_date <- as.Date(dat2$balance_date, format = "%Y-%m-%d")
+class(dat2$balance_date)
+```
+
+Let us see how many differece currency in our dataframe.
+
+```{r}
+unique(dat2$currency)
+```
+
+Let us subset by this levels.
+
+```{r}
+AUD = as.data.frame(dat2[which(dat2$currency == "AUD"),])
+NZD = as.data.frame(dat2[which(dat2$currency == "NZD"),])
+USD = as.data.frame(dat2[which(dat2$currency == "USD"),])
+GBP = as.data.frame(dat2[which(dat2$currency == "GBP"),])
+```
+
+```{r}
+usertype <- paste(NZD$user, NZD$account_name, sep = "+")
+NZD <- cbind(usertype, NZD)
+```
+
+```{r}
+NZD <- NZD[c(-2, -3, -8)]
+```
+
+```{r}
+dim(NZD)
+```
+
+There is not missing values in out data-set.
+
+
+```{r}
+accounts <- unique(NZD$usertype)
+length(accounts)
+```
+
+## Filter the business with got too less records.
+
+```{r}
+names <- c()
+min_date <- Sys.Date()
+max_date <- as.Date("1982-01-13")
+for (account in accounts){
+  number <- sum(NZD$usertype == account)
+  min_date <- min(min_date, NZD[NZD$usertype == account, ]$balance_date)
+  max_date <- max(max_date, NZD[NZD$usertype == account, ]$balance_date)
+  if ((number <= 12) & (julian(max_date, min_date)[1] >= 365)){
+    names <- c(names, account)
+  }
+}
+```
+
+```{r}
+new_data <- NZD
+for (element in names){
+  new_data <- new_data[new_data$usertype != element, ]
+}
+```
+
+```{r}
+new_accounts <- unique(new_data$usertype)
+length(new_accounts)
+```
+
+## A example with two plots.
+
+```{r}
+date <- new_data[new_data$usertype == new_accounts[1], ]$balance_date
+daily_revenue <- new_data[new_data$usertype == new_accounts[1], ]$daily_revenue
+a <- cbind(date, daily_revenue)
+plot(new_data[new_data$usertype == new_accounts[1], ]$balance_date, 
+new_data[new_data$usertype == new_accounts[1], ]$daily_revenue, xlab = "date", ylab = "daily revenue", main = "plot of daily revenue vs date")
+
+```
+
+```{r}
+date <- new_data[new_data$usertype == new_accounts[2], ]$balance_date
+daily_revenue <- new_data[new_data$usertype == new_accounts[2], ]$daily_revenue
+b <- cbind(date, daily_revenue)
+plot(new_data[new_data$usertype == new_accounts[2], ]$balance_date, 
+new_data[new_data$usertype == new_accounts[2], ]$daily_revenue, xlab = "date", ylab = "daily revenue", main = "plot of daily revenue vs date")
+```
+
+
+From the above plot we can see they are Not the uniform distribution. For example the company may have 10 records in one month but 0 at the reset of this year.
+
+
+## Aggregate by month and take the time series data.
+
+```{r}
+labels <- unique(new_data$Labels)
+```
+
+
+## The table showing the distribution of each label
+```{r}
+table(new_data$Labels)
+barplot(table(new_data$Labels))
+```
+
+## K-means clustering with distance measure equal to Dynamic time warping, input as the cloest 18 months (one and half year).
+
+```{r, warning=FALSE}
+for (label in labels){
+  print(label)
+  sub_new_data <- as.data.frame(new_data[which(new_data$Labels == label), ])
+  new_accounts <- unique(sub_new_data$usertype)
+  series <- list()
+  final <- data.frame()
+  for (element in new_accounts){
+    part <- as.data.frame(sub_new_data[sub_new_data$usertype == element, ])
+    part_sum <- part%>%
+    mutate(month = format(balance_date, "%m"), year = format(balance_date, "%Y"))%>%
+    group_by(month, year) %>%
+    summarise_at(c("daily_revenue", "revenue_to_date"), sum) %>%
+    as.data.frame()
+    part_sum <- cbind(part_sum, rep(element, nrow(part_sum)))
+    colnames(part_sum) <- c("month","year", "daily_revenue", "revenue_to_date", "accounts_name")
+    series <- c(series, list(part_sum$daily_revenue))
+    final <- rbind(final, part_sum)
+    }
+  numbers <- unique(final$accounts)
+  length(numbers)
+  Date <- as.Date(as.yearmon(paste(final$year, final$month, sep = "-")))
+  final <- cbind(Date, final)
+  series1 <- list()
+  indexs <- which(unlist(lapply(series, FUN = length)) > 18)
+  for (index in 1:length(numbers)){
+    if (index %in% indexs){
+      part <- as.data.frame(sub_new_data[sub_new_data$usertype == levels(numbers)[index], ])
+      #new_data[new_data$usertype == numbers[index], ]
+      part_filter <- part %>%  arrange(desc(balance_date)) %>% slice(1:18)
+      series1 <- c(series1, list(part_filter$daily_revenue))
+    }
+    else{
+      series1 <- c(series1, series[index])
+    }
+  }
+  if(length(series1) < 20){
+    print("Too less sample for clustering")
+  }
+  else{
+    pc <- tsclust(series1,preproc = zscore, type = "partitional", k = 10L, 
+              distance = "dtw_basic", centroid = "pam", 
+              seed = 3247L, trace = FALSE)
+    plot(pc)
+    cluster <- tibble(cluster = c(pc@cluster))$cluster
+    rev <- sapply(series1, mean)
+    sub <- cbind(cluster, rev)
+    print(tapply(rev, cluster, mean))
+  }
+}
+```
+
+
+## Hierarchical clustering with distance measure equal to Dynamic time warping, input as the cloest 18 months for each labels (one and half year).
+
+```{r}
+for (label in labels){
+  print(label)
+  sub_new_data <- as.data.frame(new_data[which(new_data$Labels == label), ])
+  new_accounts <- unique(sub_new_data$usertype)
+  series <- list()
+  final <- data.frame()
+  for (element in new_accounts){
+    part <- as.data.frame(sub_new_data[sub_new_data$usertype == element, ])
+    part_sum <- part%>%
+    mutate(month = format(balance_date, "%m"), year = format(balance_date, "%Y"))%>%
+    group_by(month, year) %>%
+    summarise_at(c("daily_revenue", "revenue_to_date"), sum) %>%
+    as.data.frame()
+    part_sum <- cbind(part_sum, rep(element, nrow(part_sum)))
+    colnames(part_sum) <- c("month","year", "daily_revenue", "revenue_to_date", "accounts_name")
+    series <- c(series, list(part_sum$daily_revenue))
+    final <- rbind(final, part_sum)
+    }
+  numbers <- unique(final$accounts)
+  length(numbers)
+  Date <- as.Date(as.yearmon(paste(final$year, final$month, sep = "-")))
+  final <- cbind(Date, final)
+  series1 <- list()
+  indexs <- which(unlist(lapply(series, FUN = length)) > 18)
+  for (index in 1:length(numbers)){
+    if (index %in% indexs){
+      part <- as.data.frame(sub_new_data[sub_new_data$usertype == levels(numbers)[index], ])
+      #new_data[new_data$usertype == numbers[index], ]
+      part_filter <- part %>%  arrange(desc(balance_date)) %>% slice(1:18)
+      series1 <- c(series1, list(part_filter$daily_revenue))
+    }
+    else{
+      series1 <- c(series1, series[index])
+    }
+  }
+  if(length(series1) < 20){
+    print("Too less sample for clustering")
+  }
+  else{
+    hc_sbd <- tsclust(series1, type = "h", k = 10L,preproc = zscore, seed = 3247L, distance = "dtw_basic", centroid = shape_extraction, control = hierarchical_control(method = "average"), trace = FALSE)
+    plot(hc_sbd, type = "sc")
+    cluster <- tibble(cluster = c(hc_sbd@cluster))$cluster
+    rev <- sapply(series1, mean)
+    sub <- cbind(cluster, rev)
+    print(tapply(rev, cluster, mean))
+  }
+}
+```
